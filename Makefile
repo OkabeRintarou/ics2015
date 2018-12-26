@@ -14,7 +14,6 @@ NEWLIBC := $(NEWLIBC_DIR)/libc.a
 include config/Makefile.git
 include config/Makefile.build
 
-all: nemu
 
 
 ##### rules for building the project #####
@@ -30,7 +29,7 @@ all_testcase: $(testcase_BIN)
 kernel: $(kernel_BIN)
 game: $(game_BIN)
 
-
+all:nemu game kernel
 ##### rules for cleaning the project #####
 
 clean-nemu:
