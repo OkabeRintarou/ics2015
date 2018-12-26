@@ -9,12 +9,12 @@ CFLAGS := -MMD -Wall -Werror -c
 LIB_COMMON_DIR := lib-common
 NEWLIBC_DIR := $(LIB_COMMON_DIR)/newlib
 NEWLIBC := $(NEWLIBC_DIR)/libc.a
-#FLOAT := obj/$(LIB_COMMON_DIR)/FLOAT.a
+FLOAT := obj/$(LIB_COMMON_DIR)/FLOAT.a
 
 include config/Makefile.git
 include config/Makefile.build
 
-
+all:nemu
 
 ##### rules for building the project #####
 
@@ -29,7 +29,6 @@ all_testcase: $(testcase_BIN)
 kernel: $(kernel_BIN)
 game: $(game_BIN)
 
-all:nemu game kernel
 ##### rules for cleaning the project #####
 
 clean-nemu:

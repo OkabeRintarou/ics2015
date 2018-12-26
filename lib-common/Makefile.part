@@ -6,4 +6,7 @@ $(FLOAT): $(FLOAT_OBJ)
 	ar r $(FLOAT) $(FLOAT_OBJ)
 
 # TODO: write a rule for generating $(FLOAT_OBJ)
-
+$(FLOAT_OBJ):/home/syl/git/myproject/ics2015/lib-common/FLOAT.c
+	@echo $(FLOAT_OBJ)
+	@echo $(FLOAT)
+	cc -O2 -o $@ $<
