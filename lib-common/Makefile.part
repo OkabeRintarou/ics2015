@@ -7,6 +7,7 @@ $(FLOAT): $(FLOAT_OBJ)
 
 # TODO: write a rule for generating $(FLOAT_OBJ)
 $(FLOAT_OBJ):lib-common/FLOAT.c
+	mkdir -p obj/lib-common
 	@echo $(FLOAT_OBJ)
 	@echo $(FLOAT)
-	cc -O2 -o $@ $<
+	cc -m32 -c -O2 -o $@ $<
