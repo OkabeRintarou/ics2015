@@ -10,17 +10,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#ifndef NDEBUG
-#define ASSERT(cond, msg) do {\
-  if (!(cond)) {\
-    printf("error: %s:%d  %s\n", __FILE__, __LINE__, (msg));\
-    exit(EXIT_FAILURE);\
-  }\
-} while (false)
-#else
-#define ASSERT(cond, msg)
-#endif
-
 enum {
   NOTYPE = 256,
   EQ,     // ==
@@ -163,13 +152,7 @@ static bool make_token(char *e) {
 /**
 BNF:
 
- <expr> ::= <decimal-number>
-      |     <hexadecimal-number>
-      |     <reg_name>
-      |     "(" <expr> ")"
-      |     <or-expr>
-      |     "+" <expr>
-      |     "-" <expr>
+ <expr> ::= <or-expr>
       ;
  <or-expr> ::=  <and-expr>
              |  <and-expr> "||" <and-expr>
@@ -178,21 +161,28 @@ BNF:
             | <test-expr> "&&" <test-expr>
             ;
 
- <test-expr> ::=    <term>
-             |      <term> "==" <term>
-             |      <term> "!=" <term>
+ <test-expr> ::=    <comp-expr>
+             |      <comp-expr> "==" <comp-expr>
+             |      <comp-expr> "!=" <comp-expr>
+             ;
+ <comp-expr> ::=    <term>
+             |      <term> "+" <term>
+             |      <term> "-" <term>
              ;
  <term> ::=     <factor>
         |       <factor> "*" <factor>
         |       <factor> "/" <factor>
         ;
  <factor> ::=   <primary>
-            |   "!" <factor>
-            |   "*" <factor>
             ;
  <primary>  ::=  <decimal-number>
              |   <hexadecimal-number>
              |   <reg_name>
+             |   "(" <expr> ")"
+             |   "+" <expr>
+             |   "-" <expr>
+             |   "!" <expr>
+             |   "*" <expr>
              ;
  */
 
@@ -207,45 +197,32 @@ enum {
 
 struct expr_t;
 
-struct expr_t {
-  int expr_type;
-  union {
-    struct expr_t *expr;
-    uint32_t value;
-  };
-};
-
-static struct expr_t *new_expr(int type, struct expr_t *ex, uint32_t value) {
-  struct expr_t *e = malloc(sizeof(struct expr_t));
-  e->expr_type = type;
-
-  if (type <= EXPR_TYPE_REG) {
-    e->value = value;
-  } else {
-    e->expr = ex;
-  }
-  return e;
-}
-
 struct primary_t {
   uint32_t value;
+  struct expr_t *expr;
 };
 
-static struct primary_t *new_primary(uint32_t v) {
+static struct primary_t *new_primary(uint32_t v, struct expr_t *e) {
   struct primary_t *p = malloc(sizeof(struct primary_t));
-  p->value = v;
+
+  memset(p, 0, sizeof(*p));
+
+  p->expr = NULL;
+  if (e) {
+    p->expr = e;
+  } else {
+    p->value = v;
+  }
   return p;
 }
 
 struct factor_t {
-  int op;
-  struct expr_t *e;
+  struct primary_t *primary;
 };
 
-static struct factor_t *new_factor(int op, struct expr_t *e) {
+static struct factor_t *new_factor(struct primary_t *p) {
   struct factor_t *f = malloc(sizeof(struct factor_t));
-  f->op = op;
-  f->e = e;
+  f->primary = p;
   return f;
 }
 
@@ -263,13 +240,27 @@ static struct term_t *new_term(int op, struct factor_t *lhs, struct factor_t *rh
   return t;
 }
 
-struct test_expr_t {
+struct comp_expr_t {
   int op;
   struct term_t *left;
   struct term_t *right;
 };
 
-struct test_expr_t *new_test_expr(int op, struct term_t *lhs, struct term_t *rhs) {
+static struct comp_expr_t *new_comp_expr(int op, struct term_t *lhs, struct term_t *rhs) {
+  struct comp_expr_t *c = malloc(sizeof(struct comp_expr_t));
+  c->op = op;
+  c->left = lhs;
+  c->right = rhs;
+  return c;
+}
+
+struct test_expr_t {
+  int op;
+  struct comp_expr_t *left;
+  struct comp_expr_t *right;
+};
+
+struct test_expr_t *new_test_expr(int op, struct comp_expr_t *lhs, struct comp_expr_t *rhs) {
   struct test_expr_t *t = malloc(sizeof(struct test_expr_t));
   t->op = op;
   t->left = lhs;
@@ -301,60 +292,100 @@ static struct or_expr_t *new_or_expr(struct and_expr_t *lhs, struct and_expr_t *
   return o;
 }
 
+struct expr_t {
+  struct or_expr_t *or_expr;
+};
+
+static struct expr_t *new_expr(struct or_expr_t *e) {
+  struct expr_t *or_expr = malloc(sizeof(struct expr_t));
+  or_expr->or_expr = e;
+  return or_expr;
+}
+
 static uint32_t get_reg_value(const char *reg) {
 
   int i;
   for (i = R_EAX; i <= R_EDI; i++) {
-    if (strcasecmp(reg, regsl[i]) == 0) {
+    if (strcasecmp(reg + 1, regsl[i]) == 0) {
       return cpu.gpr[i]._32;
     }
   }
   return 0;
 }
 
+static struct or_expr_t *parse_or_expr(int *index);
+
+static struct expr_t *parse(int *index) {
+  int i;
+
+  i = *index;
+  if (i >= nr_token) {
+    return NULL;
+  }
+
+  struct or_expr_t *or_expr = parse_or_expr(&i);
+  if (!or_expr) {
+    return NULL;
+  }
+  *index = i;
+  return new_expr(or_expr);
+}
+
 static struct primary_t *parse_primary(int *index) {
   int i = *index;
   struct primary_t *p = NULL;
+  uint32_t value;
+
   if (i < nr_token) {
-    if (tokens[i].type == EXPR_TYPE_NUMBER) {
-      p = new_primary(atoi(tokens[i].str));
-      *index = i + 1;
-    } else if (tokens[i].type == EXPR_TYPE_REG) {
-      p = new_primary(get_reg_value(tokens[i].str));
+    switch (tokens[i].type) {
+      case LPAREN:
+      case UPLUS:
+      case UMINUS:
+      case NOT:
+      case DEREF: {
+        i++;
+        struct expr_t *e = parse(&i);
+        if (!e) {
+          break;
+        }
+        if (tokens[i].type == LPAREN) {
+          if (i < nr_token && tokens[i].type == RPAREN) {
+            i++;
+          }
+        }
+        *index = i;
+        p = new_primary(0u, e);
+        break;
+      }
+      case NUMBER:
+        value = (uint32_t) (atoi(tokens[i].str));
+        *index = i + 1;
+        p = new_primary(value, NULL);
+        break;
+      case REG:
+        value = get_reg_value(tokens[i].str);
+        *index = i + 1;
+        p = new_primary(value, NULL);
+        break;
+      default:
+        Assert(false, "never reach here");
     }
   }
   return p;
 }
 
 static struct factor_t *parse_factor(int *index) {
-  int i = *index;
-  struct factor_t *f = NULL;
-  struct primary_t *p;
-
-  if (i < nr_token) {
-    switch (tokens[i].type) {
-      case NOT:
-      case MUL:
-        i++;
-        f = parse_factor(&i);
-        f = new_factor(tokens[i].type, (struct expr_t*)((void*)f));
-        *index = i + 1;
-        break;
-      default:
-        p = parse_primary(&i);
-        f = new_factor(0, (struct expr_t*)((void*)p));
-        *index = i + 1;
-        break;
-    }
+  struct primary_t *p = parse_primary(index);
+  if (!p) {
+    return NULL;
   }
-
-  return f;
+  return new_factor(p);
 }
 
 static struct term_t *parse_term(int *index) {
   struct term_t *r = NULL;
   struct factor_t *lhs, *rhs;
-  int i;
+  int i, type;
 
   lhs = parse_factor(index);
   if (!lhs) {
@@ -363,33 +394,36 @@ static struct term_t *parse_term(int *index) {
 
   i = *index;
   if (i < nr_token) {
-    switch (tokens[i].type) {
+    type = tokens[i].type;
+    switch (type) {
       case MUL:
       case DIV:
         i++;
         rhs = parse_factor(&i);
         if (rhs) {
-          r = new_term(tokens[i].type, lhs, rhs);
+          r = new_term(type, lhs, rhs);
+          *index = i;
+        } else {
+          free(lhs);
         }
-        *index = i + 1;
         break;
       default:
         r = new_term(0, lhs, NULL);
-        *index = i + 1;
+        *index = i;
         break;
     }
 
   } else {
     r = new_term(0, lhs, NULL);
-    *index = i + 1;
+    *index = i;
   }
   return r;
 }
 
-static struct test_expr_t *parse_test_expr(int *index) {
-  struct test_expr_t *r = NULL;
+static struct comp_expr_t *parse_comp_expr(int *index) {
+  struct comp_expr_t *r = NULL;
   struct term_t *lhs, *rhs;
-  int i;
+  int i, type;
 
   lhs = parse_term(index);
   if (!lhs) {
@@ -398,27 +432,68 @@ static struct test_expr_t *parse_test_expr(int *index) {
 
   i = *index;
 
-
   if (i < nr_token) {
-    switch (tokens[i].type) {
-      case EQ:
-      case NEQ:
+    type = tokens[i].type;
+    switch (type) {
+      case PLUS:
+      case MINUS:
         i++;
         rhs = parse_term(&i);
         if (rhs) {
-          r = new_test_expr(tokens[i].type, lhs, rhs);
+          r = new_comp_expr(type, lhs, rhs);
+          *index = i;
+        } else {
+          free(lhs);
         }
-        *index = i + 1;
+        break;
+      default:
+        r = new_comp_expr(0, lhs, NULL);
+        *index = i;
+        break;
+    }
+  } else {
+    r = new_comp_expr(0, lhs, NULL);
+    *index = i;
+  }
+  return r;
+}
+
+static struct test_expr_t *parse_test_expr(int *index) {
+  struct test_expr_t *r = NULL;
+  struct comp_expr_t *lhs, *rhs;
+  int i, type;
+
+  lhs = parse_comp_expr(index);
+  if (!lhs) {
+    return NULL;
+  }
+
+  i = *index;
+
+
+  if (i < nr_token) {
+    type = tokens[i].type;
+    switch (type) {
+      case EQ:
+      case NEQ:
+        i++;
+        rhs = parse_comp_expr(&i);
+        if (rhs) {
+          r = new_test_expr(type, lhs, rhs);
+          *index = i;
+        } else {
+          free(lhs);
+        }
         break;
       default:
         r = new_test_expr(0, lhs, NULL);
-        *index = i + 1;
+        *index = i;
         break;
     }
 
   } else {
     r = new_test_expr(0, lhs, NULL);
-    *index = i + 1;
+    *index = i;
   }
   return r;
 }
@@ -445,7 +520,7 @@ static struct and_expr_t *parse_and_expr(int *index) {
   } else {
     r = new_and_expr(lhs, NULL);
   }
-  *index = i + 1;
+  *index = i;
   return r;
 }
 
@@ -471,87 +546,42 @@ static struct or_expr_t *parse_or_expr(int *index) {
   } else {
     r = new_or_expr(lhs, NULL);
   }
-  *index = i + 1;
+  *index = i;
   return r;
 }
 
-static struct expr_t *parse(int *index) {
-  int i, type;
-  // uint32_t value;
-  struct expr_t *r = NULL, *other;
+static uint32_t eval(const struct expr_t *e, bool *success);
 
-  i = *index;
-  if (i >= nr_token) {
-    return NULL;
-  }
-  type = tokens[i].type;
-  if (type == NUMBER) {
-    r = new_expr(EXPR_TYPE_NUMBER, NULL, (uint32_t)(atoi(tokens[i].str)));
-    *index = i + 1;
-  } else if (type == REG) {
-    r = new_expr(EXPR_TYPE_REG, NULL, get_reg_value(tokens[i].str));
-    *index = i + 1;
-  } else if (type == UPLUS || type == UMINUS) {
-    i++;
-    other = parse(&i);
-    if (other) {
-      if (type == UPLUS) {
-        r = new_expr(EXPR_TYPE_UPLUS_EXPR, other, 0);
-      } else {
-        r = new_expr(EXPR_TYPE_UMINUS_EXPR, other, 0);
-      }
-    }
-    *index = i + 1;
-  } else if (type == LPAREN) {
-    i++;
-    r = parse(&i);
-    if (r && i < nr_token && tokens[i].type == RPAREN) {
-      i++;
-    } else {
-      r = NULL;
-    }
-    *index = i + 1;
+static uint32_t eval_primary(const struct primary_t *p, bool *success) {
+  if (p->expr) {
+    return eval(p->expr, success);
   } else {
-    struct or_expr_t *or_expr = parse_or_expr(&i);
-    r = (struct expr_t *) ((void *) or_expr);
-    *index = i + 1;
-  }
-  return r;
-}
-
-uint32_t eval_primary(const struct primary_t *p) {
-  return p->value;
-}
-
-uint32_t eval_factor(const struct factor_t *f) {
-  switch (f->op) {
-    case '!':
-      if (eval_factor((struct factor_t *) ((void *) f->e))) {
-        return 0u;
-      } else {
-        return 1u;
-      }
-    case '*': {
-      swaddr_t address = (swaddr_t) eval_factor((struct factor_t *) ((void *) f->e));
-      return swaddr_read(address, sizeof(uint32_t));
-    }
-    default:
-      return eval_primary((struct primary_t *) ((void *) f->e));
+    *success = true;
+    return p->value;
   }
 }
 
-uint32_t eval_term(const struct term_t *t, bool *success) {
+static uint32_t eval_factor(const struct factor_t *f, bool *success) {
+  return eval_primary(f->primary, success);
+}
+
+static uint32_t eval_term(const struct term_t *t, bool *success) {
 
   uint32_t lhs, rhs;
 
-  *success = true;
-  lhs = eval_factor(t->left);
+  lhs = eval_factor(t->left, success);
+  if (!*success) {
+    return 0u;
+  }
 
   switch (t->op) {
-    case '*':
-    case '/': {
-      rhs = eval_factor(t->right);
-      if (t->op == '*') {
+    case MUL:
+    case DIV: {
+      rhs = eval_factor(t->right, success);
+      if (!*success) {
+        return 0u;
+      }
+      if (t->op == MUL) {
         return lhs * rhs;
       } else {
         if (rhs == 0) {
@@ -569,26 +599,25 @@ uint32_t eval_term(const struct term_t *t, bool *success) {
   return 0;
 }
 
-uint32_t eval_test_expr(const struct test_expr_t *t, bool *success) {
+static uint32_t eval_comp_expr(const struct comp_expr_t *c, bool *success) {
   uint32_t lhs, rhs;
 
-  *success = true;
-  lhs = eval_term(t->left, success);
+  lhs = eval_term(c->left, success);
   if (!*success) {
     return 0;
   }
 
-  switch (t->op) {
-    case '=':
-    case '!': {
-      rhs = eval_term(t->right, success);
+  switch (c->op) {
+    case PLUS:
+    case MINUS: {
+      rhs = eval_term(c->right, success);
       if (!*success) {
         return 0;
       }
-      if (t->op == '=') {
-        return lhs == rhs;
+      if (c->op == PLUS) {
+        return lhs + rhs;
       } else {
-        return lhs != rhs;
+        return lhs - rhs;
       }
     }
     default:
@@ -596,10 +625,35 @@ uint32_t eval_test_expr(const struct test_expr_t *t, bool *success) {
   }
 }
 
-uint32_t eval_and_expr(const struct and_expr_t *e, bool *success) {
+static uint32_t eval_test_expr(const struct test_expr_t *t, bool *success) {
+  uint32_t lhs, rhs;
+
+  lhs = eval_comp_expr(t->left, success);
+  if (!*success) {
+    return 0;
+  }
+
+  switch (t->op) {
+    case EQ:
+    case NEQ: {
+      rhs = eval_comp_expr(t->right, success);
+      if (!*success) {
+        return 0;
+      }
+      if (t->op == EQ) {
+        return (uint32_t) (lhs == rhs);
+      } else {
+        return (uint32_t) (lhs != rhs);
+      }
+    }
+    default:
+      return lhs;
+  }
+}
+
+static uint32_t eval_and_expr(const struct and_expr_t *e, bool *success) {
 
   uint32_t lhs, rhs;
-  *success = true;
 
   lhs = eval_test_expr(e->left, success);
   if (!*success) {
@@ -610,15 +664,14 @@ uint32_t eval_and_expr(const struct and_expr_t *e, bool *success) {
     if (!*success) {
       return 0;
     }
-    return lhs && rhs;
+    return (uint32_t) (lhs && rhs);
   } else {
     return lhs;
   }
 }
 
-uint32_t eval_or_expr(const struct or_expr_t *e, bool *success) {
+static uint32_t eval_or_expr(const struct or_expr_t *e, bool *success) {
   uint32_t lhs, rhs;
-  *success = true;
 
   lhs = eval_and_expr(e->left, success);
   if (!*success) {
@@ -629,35 +682,18 @@ uint32_t eval_or_expr(const struct or_expr_t *e, bool *success) {
     if (!*success) {
       return 0;
     }
-    return lhs || rhs;
+    return (uint32_t) (lhs || rhs);
   } else {
     return lhs;
   }
 }
 
-uint32_t eval(const struct expr_t *e, bool *success) {
+static uint32_t eval(const struct expr_t *e, bool *success) {
   assert(e && success);
   *success = false;
 
-  switch (e->expr_type) {
-    case EXPR_TYPE_NUMBER:
-    case EXPR_TYPE_REG: {
-      struct primary_t *p = (struct primary_t *) ((void*)e);
-      *success = true;
-      return p->value;
-    }
-    case EXPR_TYPE_PAREN_EXPR:
-      return eval(e->expr, success);
-    case EXPR_TYPE_OR_EXPR:
-      return eval_or_expr((struct or_expr_t *) ((void *) e), success);
-    case EXPR_TYPE_UPLUS_EXPR:
-      return eval(e->expr, success);
-    case EXPR_TYPE_UMINUS_EXPR:
-      return -eval(e->expr, success);
-    default:
-      ASSERT(false, "never each here");
-  }
-  return 0;
+  uint32_t value = eval_or_expr(e->or_expr, success);
+  return value;
 }
 
 uint32_t expr(char *e, bool *success) {
@@ -683,7 +719,7 @@ uint32_t expr(char *e, bool *success) {
           tokens[i].type = UPLUS;
           break;
         default:
-          ASSERT(false, "never reach here");
+          Assert(false, "never reach here");
       }
     }
   }
