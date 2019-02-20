@@ -14,7 +14,7 @@ FLOAT := obj/$(LIB_COMMON_DIR)/FLOAT.a
 include config/Makefile.git
 include config/Makefile.build
 
-all:nemu
+all:nemu game entry
 
 ##### rules for building the project #####
 
