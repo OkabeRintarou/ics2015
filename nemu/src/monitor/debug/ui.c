@@ -119,8 +119,6 @@ static int cmd_p(char *args) {
 	val = expr(args, &success);
 	if (success) {
 		printf("%u\n", val);
-	} else {
-		printf("error\n");
 	}
 
 	return 0;

@@ -727,12 +727,10 @@ uint32_t expr(char *e, bool *success) {
   int index = 0;
   struct expr_t *tree = parse(&index);
   if (!tree) {
-    printf("invalid expression");
     return 0;
   }
   uint32_t value = eval(tree, success);
   if (!*success) {
-    printf("invalid expression");
     return 0;
   }
 
