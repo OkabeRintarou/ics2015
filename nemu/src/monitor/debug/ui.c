@@ -7,6 +7,9 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
+#define DEFAULT_DELIM " \t"
+
+
 void cpu_exec(uint32_t);
 
 /* We use the ``readline'' library to provide more flexibility to read from stdin. */
@@ -27,6 +30,24 @@ char* rl_gets() {
 	return line_read;
 }
 
+static uint32_t parse_integer(const char *arg, bool *is_pos_integer) {
+	const char *p = arg;
+	*is_pos_integer = false;
+	long long value;
+
+	if (!p || *p == '\0') {
+		return -1;
+	}
+
+	value = atoll(p);
+	if (value <= 0) {
+		return -1;
+	}
+
+	*is_pos_integer = true;
+	return (uint32_t)value;
+}
+
 static int cmd_c(char *args) {
 	cpu_exec(-1);
 	return 0;
@@ -38,6 +59,85 @@ static int cmd_q(char *args) {
 
 static int cmd_help(char *args);
 
+static int cmd_si(char *args) {
+	char *token = strtok(args, DEFAULT_DELIM);
+	bool flag;
+	uint32_t N;
+
+	if (token != NULL) {
+		N = parse_integer(token, &flag);
+		if (flag) {
+			cpu_exec(N);
+			while ((token = strtok(NULL, DEFAULT_DELIM)) != NULL) {
+				N = parse_integer(token, &flag);
+				if (flag) {
+					cpu_exec(N);
+				} else {
+					printf("Value '%s 'can't convert to positive integer.\n", token);
+					break;
+				}
+			}
+		} else {
+			printf("Value '%s 'can't convert to positive integer.\n", token);
+		}
+	} else {
+		printf("usage: si [N]\n");
+	}
+	return 0;
+}
+
+static void print_regs() {
+	int i;
+	for (i = R_EAX; i <= R_EDI; i++) {
+		printf("%s\t0x%x\t%d\n", regsl[i], cpu.gpr[i]._32, cpu.gpr[i]._32);
+	}
+}
+
+static int cmd_info(char *args) {
+	char *token = strtok(args, DEFAULT_DELIM);
+	if (token != NULL) {
+
+		if (strcmp(token,"r") == 0) {
+			print_regs();
+		} else if (strcmp(token,"w") == 0) {
+			// TODO implement command "info w"
+		}
+
+		if ((token = strtok(NULL, DEFAULT_DELIM)) != NULL) {
+			printf("Undefined info command: %s.\n", token);
+		}
+	} else {
+		printf("usage: info [r|w]\n");
+	}
+
+	return 0;
+}
+
+static int cmd_p(char *args) {
+	bool success;
+	uint32_t val;
+	val = expr(args, &success);
+	if (success) {
+		printf("%u\n", val);
+	} else {
+		printf("error\n");
+	}
+
+	return 0;
+}
+
+static int cmd_x(char *args) {
+	return -1;
+}
+
+static int cmd_w(char *args) {
+	return -1;
+}
+
+static int cmd_d(char *args) {
+	return -1;
+}
+
 static struct {
 	char *name;
 	char *description;
@@ -46,9 +146,12 @@ static struct {
 	{ "help", "Display informations about all supported commands", cmd_help },
 	{ "c", "Continue the execution of the program", cmd_c },
 	{ "q", "Exit NEMU", cmd_q },
-
-	/* TODO: Add more commands */
-
+	{ "si", "Single step execution", cmd_si},
+	{ "info", "Print program status", cmd_info},
+	{ "p", "Evaluate expression", cmd_p},
+	{ "x", "Scan memory", cmd_x},
+	{ "w", "Set watch point", cmd_w},
+	{ "d", "Delete watch point", cmd_d},
 };
 
 #define NR_CMD (sizeof(cmd_table) / sizeof(cmd_table[0]))
