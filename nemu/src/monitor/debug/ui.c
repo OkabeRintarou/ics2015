@@ -93,6 +93,20 @@ static void print_regs() {
 	}
 }
 
+static void print_watch_points() {
+  WP **wp = get_watch_points(), *cur;
+  if (!*wp) {
+  	printf("No watchpoints.\n");
+  } else {
+  	printf("%8s%15s\n", "Num", "What");
+		while ((cur = *wp)) {
+			printf("%8d%15s\n", cur->NO, cur->expression);
+
+			wp = &cur->next;
+		}
+  }
+}
+
 static int cmd_info(char *args) {
 	char *token = strtok(args, DEFAULT_DELIM);
 	if (token != NULL) {
@@ -100,7 +114,7 @@ static int cmd_info(char *args) {
 		if (strcmp(token,"r") == 0) {
 			print_regs();
 		} else if (strcmp(token,"w") == 0) {
-			// TODO implement command "info w"
+			print_watch_points();
 		}
 
 		if ((token = strtok(NULL, DEFAULT_DELIM)) != NULL) {
@@ -129,11 +143,47 @@ static int cmd_x(char *args) {
 }
 
 static int cmd_w(char *args) {
-	return -1;
+	if (!args) {
+		printf("Argument required (expression to compute).\n");
+	} else {
+		bool success;
+		expr(args, &success);
+		if (!success) {
+			return 0;
+		}
+		WP *wp = new_wp(args);
+		if (!wp) {
+			printf("Cannot new watch point.\n");
+			return -1;
+		}
+		printf("watchpoint %d: %s\n", wp->NO, wp->expression);
+	}
+	return 0;
 }
 
 static int cmd_d(char *args) {
-	return -1;
+	WP **p = get_watch_points(), *cur;
+	bool is_pos;
+
+	if (!args) {
+		printf("Watchpoint number required.\n");
+	} else {
+		int no = parse_integer(args, &is_pos);
+		if (!is_pos) {
+			printf("negative value\n");
+			return 0;
+		}
+
+		while ((cur = *p) != NULL) {
+			if (cur->NO == no) {
+				*p = cur->next;
+				free_wp(cur);
+				break;
+			}
+			p = &cur->next;
+		}
+	}
+	return 0;
 }
 
 static struct {

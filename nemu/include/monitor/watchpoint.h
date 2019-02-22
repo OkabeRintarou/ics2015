@@ -7,9 +7,13 @@ typedef struct watchpoint {
 	int NO;
 	struct watchpoint *next;
 
-	/* TODO: Add more members if necessary */
+	char *expression;
 
 
 } WP;
+
+WP **get_watch_points();
+WP *new_wp(const char *exp);
+void free_wp(WP *wp);
 
 #endif
